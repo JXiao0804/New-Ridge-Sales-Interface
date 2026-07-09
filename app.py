@@ -255,3 +255,113 @@ def fig_trend_pie(forecast_df):
         ax.axis("off")
     plt.tight_layout()
     return fig
+st.title("📦 New Ridge Sales Interface")
+st.caption("Upload your monthly sales CSV to generate reorder alerts, forecasts, and inventory charts.")
+
+uploaded = st.file_uploader("Upload Sales by Month CSV", type=["csv"])
+
+if uploaded is None:
+    st.info("👆 Upload your CSV file above to get started.")
+    st.stop()
+
+with st.spinner("Processing data…"):
+    try:
+        raw        = load_raw(uploaded)
+        df_2026, df_hist = split_and_parse(raw)
+        master     = build_features(df_2026, df_hist)
+        forecast_df = forecast_skus(df_hist)
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        st.stop()
+
+st.subheader("Summary")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total SKUs",    len(master))
+c2.metric("Critical",  int((master["urgency"] == "CRITICAL").sum()))
+c3.metric("Warning",   int((master["urgency"] == "WARNING").sum()))
+c4.metric("OK",        int((master["urgency"] == "OK").sum()))
+
+st.divider()
+
+st.subheader("Reorder Alerts")
+
+urgent_df = master[master["urgency"].isin(["CRITICAL","WARNING"])].copy()
+urgent_df = urgent_df.sort_values(["urgency", "days_remaining"])
+
+display_cols = {
+    "SKU":                  "SKU",
+    "urgency":              "Status",
+    "on_hand":              "On Hand",
+    "sell_rate":            "Avg Sales/Mo",
+    "est_stockout_days":    "Days of Stock",
+    "suggested_order_qty":  "Suggested Order Qty",
+}
+
+if urgent_df.empty:
+    st.success("No SKUs currently need reordering.")
+else:
+    table = urgent_df[list(display_cols.keys())].rename(columns=display_cols)
+    table["On Hand"]        = table["On Hand"].astype(int)
+    table["Avg Sales/Mo"]   = table["Avg Sales/Mo"].round(1)
+    table["Days of Stock"]  = table["Days of Stock"].round(1)
+
+    def color_status(val):
+        colors = {"CRITICAL": "background-color:#ffd5d5",
+                  "WARNING":  "background-color:#fff3cd"}
+        return colors.get(val, "")
+
+    st.dataframe(
+        table.style.applymap(color_status, subset=["Status"]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    csv_download = urgent_df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download Reorder Alerts CSV",
+                       csv_download, "reorder_alerts.csv", "text/csv")
+
+st.divider()
+
+st.subheader("📊 Inventory Dashboard")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.pyplot(fig_urgency_bar(master))
+with col2:
+    st.pyplot(fig_top_urgent(master))
+
+col3, col4 = st.columns(2)
+with col3:
+    st.pyplot(fig_scatter(master))
+with col4:
+    st.pyplot(fig_stockout_hist(master))
+
+st.divider()
+
+st.subheader("📈 Sales Forecast (Next 6 Months)")
+
+col5, col6 = st.columns([2, 1])
+with col5:
+    st.pyplot(fig_forecast_bar(forecast_df))
+with col6:
+    st.pyplot(fig_trend_pie(forecast_df))
+
+if not forecast_df.empty:
+    st.download_button("⬇️ Download Forecast CSV",
+                       forecast_df.to_csv(index=False).encode("utf-8"),
+                       "forecasts.csv", "text/csv")
+
+st.divider()
+
+with st.expander("🔍 Full SKU Data Table"):
+    st.dataframe(master[[
+        "SKU","urgency","on_hand","sell_rate",
+        "days_remaining","suggested_order_qty","est_stockout_days"
+    ]].rename(columns={
+        "urgency":             "Status",
+        "on_hand":             "On Hand",
+        "sell_rate":           "Avg Sales/Mo",
+        "days_remaining":      "Days Remaining",
+        "suggested_order_qty": "Suggested Order Qty",
+        "est_stockout_days":   "Est. Stockout (days)",
+    }), use_container_width=True, hide_index=True)
