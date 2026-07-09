@@ -50,7 +50,7 @@ def load_data(path : str) -> pd.DataFrame:
         
     month_data = df[[c for c in month_cols if c in df.columns]]
     df = df[month_data.notna().any(axis=1)].reset_index(drop=True)
- 
+
     return df
 
 def engineering_features(df : pd.DataFrame) -> pd.DataFrame:

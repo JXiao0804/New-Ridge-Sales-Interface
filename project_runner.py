@@ -11,7 +11,7 @@ import seaborn as sns
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 
-CSV_PATH = CSV_PATH = "Sales by Month.csv"
+CSV_PATH  = "Sales by Month.csv"
 LEAD_TIME_DAYS      = 14
 SAFETY_BUFFER_DAYS  = 7
 REORDER_POINT_DAYS  = LEAD_TIME_DAYS + SAFETY_BUFFER_DAYS   # 21 days total
