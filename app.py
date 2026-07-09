@@ -63,8 +63,7 @@ def clean_block(df, year_tag):
     active             = out[month_cols_present].notna().sum(axis=1).clip(lower=1)
     out["Avg_per_mo"]  = out["TOTAL_SALES"] / active
     return out.reset_index(drop=True)
- 
- 
+
 def split_and_parse(raw):
     header_mask = raw["SKU"].str.match(r"^Sku\s+\d{4}", na=False)
     header_idxs = raw.index[header_mask].tolist()
@@ -81,8 +80,7 @@ def split_and_parse(raw):
         hist_frames.append(clean_block(block, year_tag))
     df_hist = pd.concat(hist_frames, ignore_index=True)
     return df_2026, df_hist
- 
- 
+
 def build_features(df_2026, df_hist):
     hist_avg = (df_hist.groupby("SKU")["Avg_per_mo"]
                 .mean().rename("hist_avg_per_mo").reset_index())
@@ -115,8 +113,7 @@ def build_features(df_2026, df_hist):
     master["suggested_order_qty"] = (master["sell_rate"] * 3).round(0).astype("Int64")
     master["est_stockout_days"]   = master["days_remaining"].replace(np.inf, np.nan)
     return master
- 
- 
+
 def forecast_skus(df_hist, n_months_ahead=6):
     records = []
     for sku, grp in df_hist.groupby("SKU"):
@@ -144,3 +141,117 @@ def forecast_skus(df_hist, n_months_ahead=6):
             "trend":           "up" if lr.coef_[0] > 0.5 else ("down" if lr.coef_[0] < -0.5 else "flat"),
         })
     return pd.DataFrame(records) if records else pd.DataFrame(columns=["SKU","forecast_avg_mo","trend"])
+
+def fig_urgency_bar(master):
+    order  = ["CRITICAL","WARNING","OK","NO_MOVEMENT"]
+    counts = master["urgency"].value_counts().reindex(order, fill_value=0)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    fig.patch.set_facecolor("#f9f9f7")
+    ax.set_facecolor("#f9f9f7")
+    bars = ax.bar(counts.index, counts.values,
+                  color=[PALETTE[k] for k in order], edgecolor="white", linewidth=1.4)
+    for bar, val in zip(bars, counts.values):
+        ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.5,
+                str(val), ha="center", va="bottom", fontsize=11, fontweight="bold")
+    ax.set_title("SKU Count by Reorder Urgency", fontsize=TITLE_SIZE, fontweight="bold")
+    ax.set_ylabel("# SKUs", fontsize=LABEL_SIZE)
+    plt.tight_layout()
+    return fig
+ 
+ 
+def fig_top_urgent(master):
+    urgent = (master[master["urgency"].isin(["CRITICAL","WARNING"])]
+              .dropna(subset=["est_stockout_days"])
+              .nsmallest(15, "est_stockout_days"))
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.patch.set_facecolor("#f9f9f7")
+    ax.set_facecolor("#f9f9f7")
+    if not urgent.empty:
+        ax.barh(urgent["SKU"].str[:28], urgent["est_stockout_days"],
+                color=[PALETTE[u] for u in urgent["urgency"]], edgecolor="white")
+        ax.axvline(REORDER_POINT_DAYS, color="gray",  linestyle="--", linewidth=1.2,
+                   label=f"Reorder point ({REORDER_POINT_DAYS}d)")
+        ax.axvline(LEAD_TIME_DAYS, color=COLOR_CRIT, linestyle=":", linewidth=1.2,
+                   label=f"Lead time ({LEAD_TIME_DAYS}d)")
+        ax.legend(fontsize=9)
+        ax.invert_yaxis()
+    else:
+        ax.text(0.5, 0.5, "No urgent SKUs 🎉", ha="center", va="center",
+                fontsize=13, transform=ax.transAxes)
+    ax.set_title("Top 15 Most Urgent SKUs", fontsize=TITLE_SIZE, fontweight="bold")
+    ax.set_xlabel("Days of Stock Remaining", fontsize=LABEL_SIZE)
+    plt.tight_layout()
+    return fig
+ 
+ 
+def fig_scatter(master):
+    plot_df = master[master["days_remaining"] < 365]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    fig.patch.set_facecolor("#f9f9f7")
+    ax.set_facecolor("#f9f9f7")
+    ax.scatter(plot_df["sell_rate"], plot_df["days_remaining"],
+               c=[PALETTE[u] for u in plot_df["urgency"]],
+               alpha=0.65, s=40, edgecolors="white", linewidths=0.4)
+    ax.axhline(REORDER_POINT_DAYS, color="gray", linestyle="--", linewidth=1,
+               label=f"Reorder point ({REORDER_POINT_DAYS}d)")
+    ax.axhline(LEAD_TIME_DAYS, color=COLOR_CRIT, linestyle=":", linewidth=1,
+               label=f"Lead time ({LEAD_TIME_DAYS}d)")
+    legend_patches = [mpatches.Patch(color=v, label=k) for k, v in PALETTE.items()]
+    ax.legend(handles=legend_patches, fontsize=8, ncol=2)
+    ax.set_title("Sell Rate vs Days Remaining", fontsize=TITLE_SIZE, fontweight="bold")
+    ax.set_xlabel("Avg Monthly Sell Rate", fontsize=LABEL_SIZE)
+    ax.set_ylabel("Days of Stock Remaining", fontsize=LABEL_SIZE)
+    plt.tight_layout()
+    return fig
+
+def fig_stockout_hist(master):
+    finite = master["est_stockout_days"].dropna()
+    finite = finite[finite < 365]
+    fig, ax = plt.subplots(figsize=(8, 4))
+    fig.patch.set_facecolor("#f9f9f7")
+    ax.set_facecolor("#f9f9f7")
+    if not finite.empty:
+        ax.hist(finite, bins=30, color="#4c72b0", edgecolor="white", linewidth=0.8)
+        ax.axvline(REORDER_POINT_DAYS, color="gray", linestyle="--",
+                   label=f"Reorder point ({REORDER_POINT_DAYS}d)")
+        ax.axvline(LEAD_TIME_DAYS, color=COLOR_CRIT, linestyle=":",
+                   label=f"Lead time ({LEAD_TIME_DAYS}d)")
+        ax.legend(fontsize=9)
+    ax.set_title("Distribution of Stock Runway", fontsize=TITLE_SIZE, fontweight="bold")
+    ax.set_xlabel("Days of Stock Remaining", fontsize=LABEL_SIZE)
+    ax.set_ylabel("# SKUs", fontsize=LABEL_SIZE)
+    plt.tight_layout()
+    return fig
+
+def fig_forecast_bar(forecast_df):
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.patch.set_facecolor("#f9f9f7")
+    ax.set_facecolor("#f9f9f7")
+    if not forecast_df.empty:
+        top_fc = forecast_df.nlargest(15, "forecast_avg_mo")
+        ax.barh(top_fc["SKU"].str[:28], top_fc["forecast_avg_mo"],
+                color="#4c72b0", edgecolor="white")
+        ax.set_xlabel("Forecasted Avg Monthly Sales (next 6 mo)", fontsize=LABEL_SIZE)
+        ax.invert_yaxis()
+    else:
+        ax.text(0.5, 0.5, "Insufficient history to forecast", ha="center", va="center",
+                fontsize=12, transform=ax.transAxes)
+    ax.set_title("Top 15 Forecasted High-Volume SKUs", fontsize=TITLE_SIZE, fontweight="bold")
+    plt.tight_layout()
+    return fig
+
+def fig_trend_pie(forecast_df):
+    fig, ax = plt.subplots(figsize=(5, 5))
+    fig.patch.set_facecolor("#f9f9f7")
+    if not forecast_df.empty:
+        tc_map = {"up": COLOR_OK, "flat": COLOR_WARN, "down": COLOR_CRIT}
+        tvc    = forecast_df["trend"].value_counts()
+        ax.pie(tvc.values, labels=tvc.index,
+               colors=[tc_map.get(t,"#aaa") for t in tvc.index],
+               autopct="%1.0f%%", startangle=140,
+               textprops={"fontsize": 11})
+        ax.set_title("Sales Trend Direction", fontsize=TITLE_SIZE, fontweight="bold")
+    else:
+        ax.axis("off")
+    plt.tight_layout()
+    return fig
