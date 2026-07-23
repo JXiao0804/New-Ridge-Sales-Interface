@@ -1,10 +1,12 @@
-import warnings warnings.filterwarnings("ignore")
-import io
+import warnings
+warnings.filterwarnings("ignore")
+
 import re
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib matplotlib,use("Agg")
 import matplotlib.patches as mpatches
 import streamlit as st
 from sklearn.linear_model import LinearRegression
@@ -32,6 +34,7 @@ COLOR_WARN = "#ff7f0e"
 COLOR_OK   = "#2ca02c"
 PALETTE    = {"CRITICAL": COLOR_CRIT, "WARNING": COLOR_WARN,
               "OK": COLOR_OK, "NO_MOVEMENT": "#aaaaaa"}
+
 
 def load_raw(uploaded_file):
     raw = pd.read_csv(uploaded_file, encoding="utf-8-sig", header=None, dtype=str)
@@ -64,11 +67,12 @@ def clean_block(df, year_tag):
     out["Avg_per_mo"]  = out["TOTAL_SALES"] / active
     return out.reset_index(drop=True)
 
+
 def split_and_parse(raw):
     header_mask = raw["SKU"].str.match(r"^Sku\s+\d{4}", na=False)
     header_idxs = raw.index[header_mask].tolist()
     if len(header_idxs) < 2:
-        raise ValueError(f"Expected ≥2 year-block headers, found {len(header_idxs)}")
+        raise ValueError(f"Expected 2+ year-block headers, found {len(header_idxs)}")
     df_2026 = clean_block(raw.iloc[header_idxs[0]+1 : header_idxs[1]], "2026")
     hist_frames = []
     for i in range(1, len(header_idxs)):
@@ -81,6 +85,7 @@ def split_and_parse(raw):
     df_hist = pd.concat(hist_frames, ignore_index=True)
     return df_2026, df_hist
 
+
 def build_features(df_2026, df_hist):
     hist_avg = (df_hist.groupby("SKU")["Avg_per_mo"]
                 .mean().rename("hist_avg_per_mo").reset_index())
@@ -92,7 +97,7 @@ def build_features(df_2026, df_hist):
     base = df_2026[["SKU","Avg_per_mo","On_Hand"] + ytd_months].copy()
     base.rename(columns={"Avg_per_mo": "ytd_avg_per_mo"}, inplace=True)
     master = (base.merge(hist_avg, on="SKU", how="left")
-                  .merge(avg_2025,  on="SKU", how="left"))
+                  .merge(avg_2025, on="SKU", how="left"))
     master["sell_rate"]  = (master["avg_2025"]
                             .fillna(master["hist_avg_per_mo"])
                             .fillna(master["ytd_avg_per_mo"]))
@@ -103,16 +108,22 @@ def build_features(df_2026, df_hist):
         master["on_hand"] / master["daily_rate"],
         np.inf
     )
+
     def urgency(row):
         dr = row["days_remaining"]
-        if dr == np.inf:          return "NO_MOVEMENT"
-        if row["on_hand"] == 0 or dr <= LEAD_TIME_DAYS: return "CRITICAL"
-        if dr <= REORDER_POINT_DAYS: return "WARNING"
+        if dr == np.inf:
+            return "NO_MOVEMENT"
+        if row["on_hand"] == 0 or dr <= LEAD_TIME_DAYS:
+            return "CRITICAL"
+        if dr <= REORDER_POINT_DAYS:
+            return "WARNING"
         return "OK"
+
     master["urgency"]             = master.apply(urgency, axis=1)
     master["suggested_order_qty"] = (master["sell_rate"] * 3).round(0).astype("Int64")
     master["est_stockout_days"]   = master["days_remaining"].replace(np.inf, np.nan)
     return master
+
 
 def forecast_skus(df_hist, n_months_ahead=6):
     records = []
@@ -127,7 +138,7 @@ def forecast_skus(df_hist, n_months_ahead=6):
         X = np.arange(len(vals)).reshape(-1, 1)
         y = np.array(vals)
         lr = LinearRegression().fit(X, y)
-        Xf = np.arange(len(vals), len(vals)+n_months_ahead).reshape(-1, 1)
+        Xf = np.arange(len(vals), len(vals) + n_months_ahead).reshape(-1, 1)
         lr_preds = lr.predict(Xf).clip(min=0)
         if len(vals) >= 12:
             rf = RandomForestRegressor(n_estimators=50, random_state=42)
@@ -141,6 +152,7 @@ def forecast_skus(df_hist, n_months_ahead=6):
             "trend":           "up" if lr.coef_[0] > 0.5 else ("down" if lr.coef_[0] < -0.5 else "flat"),
         })
     return pd.DataFrame(records) if records else pd.DataFrame(columns=["SKU","forecast_avg_mo","trend"])
+
 
 def fig_urgency_bar(master):
     order  = ["CRITICAL","WARNING","OK","NO_MOVEMENT"]
@@ -157,8 +169,8 @@ def fig_urgency_bar(master):
     ax.set_ylabel("# SKUs", fontsize=LABEL_SIZE)
     plt.tight_layout()
     return fig
- 
- 
+
+
 def fig_top_urgent(master):
     urgent = (master[master["urgency"].isin(["CRITICAL","WARNING"])]
               .dropna(subset=["est_stockout_days"])
@@ -169,21 +181,21 @@ def fig_top_urgent(master):
     if not urgent.empty:
         ax.barh(urgent["SKU"].str[:28], urgent["est_stockout_days"],
                 color=[PALETTE[u] for u in urgent["urgency"]], edgecolor="white")
-        ax.axvline(REORDER_POINT_DAYS, color="gray",  linestyle="--", linewidth=1.2,
+        ax.axvline(REORDER_POINT_DAYS, color="gray", linestyle="--", linewidth=1.2,
                    label=f"Reorder point ({REORDER_POINT_DAYS}d)")
         ax.axvline(LEAD_TIME_DAYS, color=COLOR_CRIT, linestyle=":", linewidth=1.2,
                    label=f"Lead time ({LEAD_TIME_DAYS}d)")
         ax.legend(fontsize=9)
         ax.invert_yaxis()
     else:
-        ax.text(0.5, 0.5, "No urgent SKUs 🎉", ha="center", va="center",
+        ax.text(0.5, 0.5, "No urgent SKUs", ha="center", va="center",
                 fontsize=13, transform=ax.transAxes)
     ax.set_title("Top 15 Most Urgent SKUs", fontsize=TITLE_SIZE, fontweight="bold")
     ax.set_xlabel("Days of Stock Remaining", fontsize=LABEL_SIZE)
     plt.tight_layout()
     return fig
- 
- 
+
+
 def fig_scatter(master):
     plot_df = master[master["days_remaining"] < 365]
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -204,6 +216,7 @@ def fig_scatter(master):
     plt.tight_layout()
     return fig
 
+
 def fig_stockout_hist(master):
     finite = master["est_stockout_days"].dropna()
     finite = finite[finite < 365]
@@ -223,6 +236,7 @@ def fig_stockout_hist(master):
     plt.tight_layout()
     return fig
 
+
 def fig_forecast_bar(forecast_df):
     fig, ax = plt.subplots(figsize=(9, 5))
     fig.patch.set_facecolor("#f9f9f7")
@@ -240,6 +254,7 @@ def fig_forecast_bar(forecast_df):
     plt.tight_layout()
     return fig
 
+
 def fig_trend_pie(forecast_df):
     fig, ax = plt.subplots(figsize=(5, 5))
     fig.patch.set_facecolor("#f9f9f7")
@@ -247,7 +262,7 @@ def fig_trend_pie(forecast_df):
         tc_map = {"up": COLOR_OK, "flat": COLOR_WARN, "down": COLOR_CRIT}
         tvc    = forecast_df["trend"].value_counts()
         ax.pie(tvc.values, labels=tvc.index,
-               colors=[tc_map.get(t,"#aaa") for t in tvc.index],
+               colors=[tc_map.get(t, "#aaa") for t in tvc.index],
                autopct="%1.0f%%", startangle=140,
                textprops={"fontsize": 11})
         ax.set_title("Sales Trend Direction", fontsize=TITLE_SIZE, fontweight="bold")
@@ -255,6 +270,10 @@ def fig_trend_pie(forecast_df):
         ax.axis("off")
     plt.tight_layout()
     return fig
+
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+
 st.title("📦 New Ridge Sales Interface")
 st.caption("Upload your monthly sales CSV to generate reorder alerts, forecasts, and inventory charts.")
 
@@ -266,44 +285,44 @@ if uploaded is None:
 
 with st.spinner("Processing data…"):
     try:
-        raw        = load_raw(uploaded)
+        raw             = load_raw(uploaded)
         df_2026, df_hist = split_and_parse(raw)
-        master     = build_features(df_2026, df_hist)
-        forecast_df = forecast_skus(df_hist)
+        master          = build_features(df_2026, df_hist)
+        forecast_df     = forecast_skus(df_hist)
     except Exception as e:
         st.error(f"Error processing file: {e}")
         st.stop()
 
 st.subheader("Summary")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total SKUs",    len(master))
-c2.metric("Critical",  int((master["urgency"] == "CRITICAL").sum()))
-c3.metric("Warning",   int((master["urgency"] == "WARNING").sum()))
-c4.metric("OK",        int((master["urgency"] == "OK").sum()))
+c1.metric("Total SKUs", len(master))
+c2.metric("🔴 Critical", int((master["urgency"] == "CRITICAL").sum()))
+c3.metric("🟡 Warning",  int((master["urgency"] == "WARNING").sum()))
+c4.metric("🟢 OK",       int((master["urgency"] == "OK").sum()))
 
 st.divider()
 
-st.subheader("Reorder Alerts")
+st.subheader("🔴 Reorder Alerts")
 
 urgent_df = master[master["urgency"].isin(["CRITICAL","WARNING"])].copy()
 urgent_df = urgent_df.sort_values(["urgency", "days_remaining"])
 
 display_cols = {
-    "SKU":                  "SKU",
-    "urgency":              "Status",
-    "on_hand":              "On Hand",
-    "sell_rate":            "Avg Sales/Mo",
-    "est_stockout_days":    "Days of Stock",
-    "suggested_order_qty":  "Suggested Order Qty",
+    "SKU":                 "SKU",
+    "urgency":             "Status",
+    "on_hand":             "On Hand",
+    "sell_rate":           "Avg Sales/Mo",
+    "est_stockout_days":   "Days of Stock",
+    "suggested_order_qty": "Suggested Order Qty",
 }
 
 if urgent_df.empty:
     st.success("No SKUs currently need reordering.")
 else:
     table = urgent_df[list(display_cols.keys())].rename(columns=display_cols)
-    table["On Hand"]        = table["On Hand"].astype(int)
-    table["Avg Sales/Mo"]   = table["Avg Sales/Mo"].round(1)
-    table["Days of Stock"]  = table["Days of Stock"].round(1)
+    table["On Hand"]       = table["On Hand"].astype(int)
+    table["Avg Sales/Mo"]  = table["Avg Sales/Mo"].round(1)
+    table["Days of Stock"] = table["Days of Stock"].round(1)
 
     def color_status(val):
         colors = {"CRITICAL": "background-color:#ffd5d5",
@@ -311,14 +330,14 @@ else:
         return colors.get(val, "")
 
     st.dataframe(
-        table.style.applymap(color_status, subset=["Status"]),
+        table.style.map(color_status, subset=["Status"]),
         use_container_width=True,
         hide_index=True,
     )
 
-    csv_download = urgent_df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download Reorder Alerts CSV",
-                       csv_download, "reorder_alerts.csv", "text/csv")
+                       urgent_df.to_csv(index=False).encode("utf-8"),
+                       "reorder_alerts.csv", "text/csv")
 
 st.divider()
 
